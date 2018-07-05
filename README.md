@@ -1,6 +1,6 @@
 # rgpg [![Install gem](https://badge.fury.io/rb/rgpg.png)](https://rubygems.org/gems/rgpg) [![Build status](https://travis-ci.org/rcook/rgpg.png?branch=master,0.3.0,0.2.4)](https://travis-ci.org/rcook/rgpg)
 
-A simple Ruby wrapper around `gpg` command for file encryption
+A simple Ruby wrapper around `gpg` command for file encryption. This version only guaranteed to work with gpg 2.0.22 to 2.2.0.
 
 _rgpg_ is a simple API for interacting with the `gpg` tool. It is specifically designed to avoid altering global keyring state by creating temporary public and secret keyrings on the fly for encryption and decryption.
 

@@ -16,5 +16,7 @@ Gem::Specification.new do |s|
   s.files = ['LICENSE'] + Dir.glob('lib/**/*.rb')
   s.require_paths = ['lib']
   s.homepage = 'https://github.com/rcook/rgpg/'
+
+  s.add_development_dependency 'test-unit', '~> 3.1.9'
 end
 

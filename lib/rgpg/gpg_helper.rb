@@ -25,17 +25,17 @@ module Rgpg
       raise ArgumentError.new("Public key file \"#{public_key_file_name}\" does not exist") unless File.exist?(public_key_file_name)
       raise ArgumentError.new("Input file \"#{input_file_name}\" does not exist") unless File.exist?(input_file_name)
 
-      recipient = get_recipient(public_key_file_name)
-      with_temporary_encrypt_keyring(public_key_file_name) do |keyring_file_name|
+      with_temp_home_dir(public_key_file_name: public_key_file_name) do |home_dir|
+        recipient = get_recipient(public_key_file_name, home_dir: home_dir)
         run_gpg_capture(
-          '--keyring', keyring_file_name,
           '--output', output_file_name,
           '--encrypt',
           '--recipient', recipient,
           '--yes',
           '--trust-model', 'always',
           '--no-tty',
-          input_file_name
+          input_file_name,
+          home_dir: home_dir
         )
       end
     end
@@ -45,25 +45,38 @@ module Rgpg
       raise ArgumentError.new("Private key file \"#{private_key_file_name}\" does not exist") unless File.exist?(private_key_file_name)
       raise ArgumentError.new("Input file \"#{input_file_name}\" does not exist") unless File.exist?(input_file_name)
 
-      recipient = get_recipient(private_key_file_name)
-      with_temporary_decrypt_keyrings(public_key_file_name, private_key_file_name) do |keyring_file_name, secret_keyring_file_name|
-        args = '--keyring', keyring_file_name,
-               '--secret-keyring', secret_keyring_file_name,
-               '--output', output_file_name,
+      with_temp_home_dir(public_key_file_name: public_key_file_name, private_key_file_name: private_key_file_name) do |home_dir|
+        recipient = get_recipient(public_key_file_name, home_dir: home_dir)
+        args = '--output', output_file_name,
                '--decrypt',
                '--yes',
                '--trust-model', 'always',
                '--no-tty',
                input_file_name
         args.unshift '--passphrase', passphrase unless passphrase.nil?
-        run_gpg_capture(*args)
+        run_gpg_capture(*args, home_dir: home_dir)
       end
     end
 
     private
 
-    def self.with_temp_home_dir
+    def self.with_temp_home_dir(public_key_file_name: nil, private_key_file_name: nil)
       Dir.mktmpdir('.rgpg-tmp-', ENV['HOME']) do |home_dir|
+
+        if public_key_file_name
+          run_gpg_capture(
+            '--import', public_key_file_name,
+            home_dir: home_dir
+          )
+        end
+
+        if private_key_file_name
+          run_gpg_capture(
+            '--import', private_key_file_name,
+            home_dir: home_dir
+          )
+        end
+
         yield home_dir
       end
     end
@@ -71,39 +84,35 @@ module Rgpg
     def self.build_safe_command_line(home_dir, *args)
       fragments = [
         'gpg',
-        '--homedir', home_dir,
-        '--no-default-keyring'
+        '-v',
+        '--homedir', home_dir
       ] + args
       fragments.collect { |fragment| Shellwords.escape(fragment) }.join(' ')
     end
 
-    def self.run_gpg_no_capture(*args)
-      with_temp_home_dir do |home_dir|
-        command_line = build_safe_command_line(home_dir, *args)
-        result = system(command_line)
-        raise RuntimeError.new('gpg failed') unless result
-      end
+    def self.run_gpg_no_capture(*args, home_dir:)
+      command_line = build_safe_command_line(home_dir, *args)
+      result = system(command_line)
+      raise RuntimeError.new('gpg failed') unless result
     end
 
-    def self.run_gpg_capture(*args)
-      with_temp_home_dir do |home_dir|
-        command_line = build_safe_command_line(home_dir, *args)
+    def self.run_gpg_capture(*args, home_dir:)
+      command_line = build_safe_command_line(home_dir, *args)
 
-        output_file = Tempfile.new('gpg-output')
-        begin
-          output_file.close
-          result = system("#{command_line} > #{Shellwords.escape(output_file.path)} 2>&1")
+      output_file = Tempfile.new('gpg-output')
+      begin
+        output_file.close
+        result = system("#{command_line} > #{Shellwords.escape(output_file.path)} 2>&1")
 
-          output = nil
-          File.open(output_file.path) do |f|
-            output = f.read
-          end
-          raise RuntimeError.new("gpg failed: #{output}") unless result
-
-          output.lines.collect(&:chomp)
-        ensure
-          output_file.unlink
+        output = nil
+        File.open(output_file.path) do |f|
+          output = f.read
         end
+        raise RuntimeError.new("gpg failed: #{output}") unless result
+
+        output.lines.collect(&:chomp)
+      ensure
+        output_file.unlink
       end
     end
 
@@ -126,9 +135,14 @@ module Rgpg
       EOS
     end
 
-    def self.get_recipient(key_file_name)
-      lines = run_gpg_capture(key_file_name)
+    def self.get_recipient(key_file_name, home_dir:)
+      lines = run_gpg_capture(key_file_name, home_dir: home_dir)
+
       result = lines.detect { |line| line =~ /^(pub|sec)\s+\d+(D|R)\/([0-9a-fA-F]{8}).+<(.+)>/ }
+      unless result
+        # try gnu 2.0 format
+        result = lines.join("|") =~ /pub\s+([a-z]+)\d+[^\|]+\|\s+([0-9a-fA-F]+)\|uid\s+.+<(.+)>/
+      end
       raise RuntimeError.new('Invalid output') unless result
       key_id = $2
       recipient = $3
@@ -137,7 +151,6 @@ module Rgpg
     def self.with_temporary_encrypt_keyring(public_key_file_name)
       with_temporary_keyring_file do |keyring_file_name|
         run_gpg_capture(
-          '--keyring', keyring_file_name,
           '--import', public_key_file_name
         )
         yield keyring_file_name
@@ -148,8 +161,6 @@ module Rgpg
       with_temporary_keyring_file do |keyring_file_name|
         with_temporary_keyring_file do |secret_keyring_file_name|
           run_gpg_capture(
-            '--keyring', keyring_file_name,
-            '--secret-keyring', secret_keyring_file_name,
             '--import', private_key_file_name
           )
           yield keyring_file_name, secret_keyring_file_name

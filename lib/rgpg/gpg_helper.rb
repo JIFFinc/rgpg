@@ -77,7 +77,14 @@ module Rgpg
           )
         end
 
-        yield home_dir
+        r = yield home_dir
+
+        # sockets will not be deleted by Dir.mktmpdir and raise an error leaving cruft behind
+        Dir.glob(home_dir + '/S.*') do |socket|
+          File.delete(socket)
+        end
+
+        r
       end
     end
 
